@@ -1,0 +1,174 @@
+Starten: bin/drill-embedded
+
+Problem: Dateizugriffe auf mehere taused Patient-Records dauern lang
+Lösung: CTAS => https://drill.apache.org/docs/create-table-as-ctas/
+        Mergen der JSON Files in ein einziges Table
+        1. //Workspace setzen: http://localhost:8047/storage
+        2. ALTER SESSION SET `store.format`='json';
+        3. USE dfs.tmp; --temp storage verwenden 
+        4. CREATE TABLE patients_json AS select * from dfs.`/home/david/Schreibtisch/Bachelorarbeit/apacheDrillPlayground/data`;
+        5. Ganz normal Table abfragen: SELECT diagnoses from patients_json;
+
+
+
+Abfragen:
+        
+        SNV: 
+
+            SELECT s.simpleVariant.id AS simpleVariantId,
+                    s.patient.id AS patientId
+                FROM (SELECT flatten(n.ngsReports.results.simpleVariants) AS simpleVariant,
+                    n.patient
+                FROM (SELECT flatten(ngsReports) AS ngsReports,
+                    patient
+                FROM patients_json) n ) s
+                WHERE s.simpleVariant.gene.code = 'HGNC:76'
+                    AND s.simpleVariant.dnaChange.code = 'c.308C>A';
+        
+        SNV mit Supporting: 
+    
+            SELECT s.simpleVariant.id AS simpleVariantId,
+                    s.patient.id AS patientId
+                FROM (SELECT flatten(n.ngsReports.results.simpleVariants) AS simpleVariant,
+                    n.patient
+                FROM (SELECT flatten(ngsReports) AS ngsReports,
+                    patient
+                FROM patients_json) n ) s
+                WHERE s.simpleVariant.gene.code = 'HGNC:76'
+                    AND s.simpleVariant.dnaChange.code = 'c.308C>A'
+                    AND s.simpleVariant.id IN (SELECT sp.supportingVariant.id
+                FROM (SELECT flatten(m.medicationRecommendation.supportingVariants) AS supportingVariant,
+                    patient
+                FROM (SELECT flatten(c.carePlan.medicationRecommendations) AS medicationRecommendation,
+                    patient
+                FROM (SELECT flatten(carePlans) AS carePlan,
+                    patient
+                FROM patients_json) c) m) sp
+                WHERE sp.patient.id = s.patient.id)
+
+        CNV:
+
+            SELECT count(a.affected) ,
+                    a.patientId ,
+                    a.variantId
+                FROM (SELECT flatten(s.copyNumberVariant.reportedAffectedGenes) AS affected ,
+                    s.patient.id AS patientId ,
+                    s.copyNumberVariant.id AS variantId
+                FROM (SELECT flatten(n.ngsReports.results.copyNumberVariants) AS copyNumberVariant ,
+                    n.patient
+                FROM (SELECT flatten(ngsReports) AS ngsReports ,
+                    patient
+                FROM patients_json ) n ) s ) a
+                WHERE a.affected.code = 'HGNC:1097'
+                    OR a.affected.code = 'HGNC:1100'
+                GROUP BY  a.patientId ,a.variantId
+            HAVING count(a.affected) = 2;
+
+        CNV mit Supporting:
+
+            SELECT count(a.affected) ,
+                    a.patientId ,
+                    a.variantId
+                FROM (SELECT flatten(s.copyNumberVariant.reportedAffectedGenes) AS affected ,
+                    s.patient.id AS patientId ,
+                    s.copyNumberVariant.id AS variantId
+                FROM (SELECT flatten(n.ngsReports.results.copyNumberVariants) AS copyNumberVariant ,
+                    n.patient
+                FROM (SELECT flatten(ngsReports) AS ngsReports ,
+                    patient
+                FROM patients_json ) n ) s ) a
+                WHERE (a.affected.code = 'HGNC:391'
+                    OR a.affected.code = 'HGNC:76'
+                    OR a.affected.code = 'HGNC:1100')
+                    AND a.variantId IN (SELECT sp.supportingVariant.id
+                FROM (SELECT flatten(m.medicationRecommendation.supportingVariants) AS supportingVariant,
+                    patient
+                FROM (SELECT flatten(c.carePlan.medicationRecommendations) AS medicationRecommendation,
+                    patient
+                FROM (SELECT flatten(carePlans) AS carePlan,
+                    patient
+                FROM patients_json) c) m) sp
+                WHERE sp.patient.id = a.patientId)
+                GROUP BY  a.patientId ,a.variantId
+            HAVING count(a.affected) = 3;
+
+
+        Diagnose: 
+        
+            SELECT q.d.code.code AS diagnoseCode,
+                    q.patient.id AS patientId
+                FROM (SELECT flatten(diagnoses) d,
+                    patient
+                FROM patients_json) q
+                WHERE q.d.code.code = 'C67.7';
+        
+        Tumormorphologie:
+
+            SELECT h.histologyReport['results']['tumorMorphology']['value']['code'] AS responseCode,
+                    patient['id'] AS patientId
+                FROM (SELECT flatten(histologyReports) AS histologyReport,
+                    patient
+                FROM patients_json) h
+                WHERE h.histologyReport['results']['tumorMorphology']['value']['code'] = '8586/3';
+
+        Medikation - Einzeln:
+        
+            SELECT *
+                FROM (SELECT m.medication.display AS medicationDisplay,
+                    m.patient['id'] AS patientId
+                FROM (SELECT flatten(h.history['medication']) AS medication,
+                    h.patient
+                FROM (SELECT flatten(t.therapy['history']) AS history,
+                    t.patient
+                FROM (SELECT flatten(therapies) AS therapy,
+                    patient
+                FROM patients_json) t) h) m
+            UNION
+            SELECT m.medication['display'] AS medicationDisplay,
+                    patient['id'] AS patientId
+                FROM (SELECT flatten(g.guidelineTherapy['medication']) AS medication,
+                    patient
+                FROM (SELECT flatten(guidelineTherapies) AS guidelineTherapy,
+                    patient
+                FROM patients_json) g) m) u
+                WHERE u.medicationDisplay = 'Infigratinib'
+                    OR u.medicationDisplay = 'Edrecolomab'
+                GROUP BY  u.medicationDisplay,u.patientId;
+        
+        Medikation - Kombination:
+
+            SELECT count(u.medication),u.patientId, u.gId
+                FROM (SELECT m.medication['display'] AS medication,
+                    m.patient['id'] AS patientId,
+                    m.gId AS gId
+                FROM (SELECT flatten(h.history['medication']) AS medication, h.history['id'] AS gId,
+                    h.patient
+                FROM (SELECT flatten(t.therapy['history']) AS history,
+                    t.patient
+                FROM (SELECT flatten(therapies) AS therapy,
+                    patient
+                FROM patients_json) t) h) m
+            UNION
+            SELECT m.medication['display'] AS medication ,
+                    m.patient['id'] AS patientId,
+                    m.gId AS gId
+                FROM (SELECT flatten(g.guidelineTherapy['medication']) AS medication, g.guidelineTherapy['id'] AS gId,
+                    patient
+                FROM (SELECT flatten(guidelineTherapies) AS guidelineTherapy,
+                    patient
+                FROM patients_json) g) m) u
+                WHERE u.medication = 'Infigratinib'
+                    OR u.medication = 'Epacadostat'
+                GROUP BY u.patientId, u.gId HAVING count(u.medication) = 2;
+
+        Response:
+
+            SELECT r.response['value']['code'] AS responseCode ,
+                    patient['id'] AS patientId
+                FROM (SELECT flatten(responses) AS response,
+                    patient
+                FROM patients_json) r
+                WHERE r.response['value']['code'] = 'CR';
+
+
+

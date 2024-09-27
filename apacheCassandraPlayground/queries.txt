@@ -1,0 +1,31 @@
+create keyspace dnpm with replication = {'class' : 'SimpleStrategy', 'replication_factor':1};
+
+use dnpm;
+
+create table simplevariants(
+    gene_name text,
+    dna_change text,
+    protein_change text,
+    supporting boolean,
+    patient_id text,
+    PRIMARY KEY ((gene_name),dna_change,protein_change,supporting)
+);
+
+insert into simplevariants
+(gene_name, dna_change, protein_change,supporting,patient_id) values 
+('HGNC:1097','c.353T>C','p.Arg78_Gly79insX[23]',false,'ec0333ed-cfd2-4702-b441-d04e8f7d1e7f');
+
+
+create table simplevariants2(
+    gene_name text,
+    dna_change text,
+    protein_change text,
+    supporting boolean,
+    patient_id text,
+    PRIMARY KEY ((gene_name,dna_change,protein_change,supporting))
+);
+
+insert into simplevariants2
+(gene_name, dna_change, protein_change,supporting,patient_id) values 
+('HGNC:1097','c.353T>C','p.Arg78_Gly79insX[23]',false,'ec0333ed-cfd2-4702-b441-d04e8f7d1e7f');
+
